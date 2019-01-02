@@ -28,7 +28,7 @@ namespace WaterPhysics
             boatRigidBody = GetComponent<Rigidbody>();
 
             meshFilter = GetComponent<MeshFilter>();
-            crossSectionMeshGenerator = new CrossSectionMeshGenerator(this.transform, this.meshFilter);
+            crossSectionMeshGenerator = new CrossSectionMeshGenerator(this.transform, this.meshFilter, this.boatRigidBody);
 
             underwaterMesh = underwaterObject.GetComponent<MeshFilter>().mesh;
         }
@@ -45,28 +45,59 @@ namespace WaterPhysics
         {
             if(underwaterMesh.vertexCount > 0)
             {
-                ApplyBuoyancyForce();
+                ApplyWaterForces();
             }
         }
 
-        private void ApplyBuoyancyForce()
+        void ApplyWaterForces()
         {
             List<TriangleData> underwaterTriangleData = crossSectionMeshGenerator.cuttedMesh;
+
+            float Cf = WaterPhysicsMath.ResistanceCoeficient(boatRigidBody.velocity.magnitude, CalculateUnderWaterLength());
+
+            float boatArea = crossSectionMeshGenerator.objectTotalArea;
+            float boatMass = boatRigidBody.mass;
+
+            List<SlammingForceData> objectSlammingForceData = crossSectionMeshGenerator.slammingForceData;
+            List<int> originalTriangleIndex = crossSectionMeshGenerator.originalTriangleIndex;
+
+            CalculateTriangleVelocities(ref objectSlammingForceData);
+
             for (int i = 0; i < underwaterTriangleData.Count; i++)
             {
                 TriangleData triangle = underwaterTriangleData[i];
+                SlammingForceData slammingForceData = objectSlammingForceData[originalTriangleIndex[i]];
 
-                Vector3 force = waterDensity * Physics.gravity.y * triangle.distanceToSurface * triangle.area * triangle.normal;
-                force.x = 0;
-                force.z = 0;
+                Vector3 waterForce = Vector3.zero;
 
-                boatRigidBody.AddForceAtPosition(force, triangle.center);
+                waterForce += WaterPhysicsMath.BuoyancyForce(triangle, WaterPhysicsMath.RHO_OCEAN_WATER);
+                waterForce += WaterPhysicsMath.PressureDrag(triangle);
+                waterForce += WaterPhysicsMath.ViscousWaterResistanceForce(WaterPhysicsMath.RHO_OCEAN_WATER, triangle, Cf);
+                waterForce += WaterPhysicsMath.SlammingForce(slammingForceData, triangle, boatMass, boatArea, Time.fixedDeltaTime);
 
-                
-                Debug.DrawRay(triangle.center, force.normalized, Color.blue);
+
+                boatRigidBody.AddForceAtPosition(waterForce, triangle.center);
+
+
+                //Debug.DrawRay(triangle.center, buoyancy.normalized, Color.blue);
                 //Debug.DrawRay(triangle.center, triangle.normal, Color.green);
 
             }
+        }
+
+        private void CalculateTriangleVelocities(ref List<SlammingForceData> slammingForceData)
+        {
+            for(int i = 0; i < slammingForceData.Count; i++)
+            {
+                slammingForceData[i].previousVelocity = slammingForceData[i].velocity;
+
+                slammingForceData[i].velocity = WaterPhysicsMath.TrianglePointVelocity(boatRigidBody.velocity, boatRigidBody.angularVelocity, boatRigidBody.worldCenterOfMass, slammingForceData[i].center);
+            }
+        }
+
+        private float CalculateUnderWaterLength()
+        {
+            return underwaterMesh.bounds.size.z;
         }
     }
 

@@ -8,6 +8,12 @@ namespace WaterPhysics
     {
         public List<TriangleData> cuttedMesh = new List<TriangleData>();
 
+        public float objectTotalArea;
+
+        public List<SlammingForceData> slammingForceData;
+
+        public List<int> originalTriangleIndex;
+
         private Transform objectTransform;
         private Vector3[] objectVertices;
         private int[] objectTriangles;
@@ -16,7 +22,9 @@ namespace WaterPhysics
 
         private Vector3[] objectVerticesGlobalPos;
 
-        public CrossSectionMeshGenerator(Transform transform, MeshFilter meshFilter)
+        private Rigidbody objectRigidBody;
+
+        public CrossSectionMeshGenerator(Transform transform, MeshFilter meshFilter, Rigidbody objectRigidBody)
         {
             this.objectTransform = transform;
             this.objectVertices = meshFilter.mesh.vertices;
@@ -25,11 +33,25 @@ namespace WaterPhysics
             this.objectVerticesGlobalPos = new Vector3[this.objectVertices.Length];
 
             this.pointDistancesToSurface = new float[this.objectVertices.Length];
+
+            this.objectRigidBody = objectRigidBody;
+
+            this.originalTriangleIndex = new List<int>();
+
+            this.slammingForceData = InitiateObjectSlammingForceData();
+
+            this.objectTotalArea = CalculateObjectTotalArea();
         }
 
         public void GenerateMeshUnder()
         {
             cuttedMesh.Clear();
+            originalTriangleIndex.Clear();
+
+            for(int i = 0; i < slammingForceData.Count; i++)
+            {
+                slammingForceData[i].previousSubmergedArea = slammingForceData[i].submergedArea;
+            }
 
             // Find distance of all points to the cross section surface
             for(int i = 0; i < objectVertices.Length; i++)
@@ -43,7 +65,55 @@ namespace WaterPhysics
             AddTriangles(true);
         }
 
-        public void AddTriangles(bool under)
+        private float CalculateObjectTotalArea()
+        {
+            float area = 0f;
+
+            int i = 0;
+            while(i < objectTriangles.Length)
+            {
+                Vector3 p1 = objectVertices[objectTriangles[i]];
+                i++;
+
+                Vector3 p2 = objectVertices[objectTriangles[i]];
+                i++;
+
+                Vector3 p3 = objectVertices[objectTriangles[i]];
+                i++;
+
+                area += WaterPhysicsMath.TriangleArea(p1, p2, p3);
+            }
+
+
+            return area;
+        }
+
+        private List<SlammingForceData> InitiateObjectSlammingForceData()
+        {
+            List<SlammingForceData> slammingForceData = new List<SlammingForceData>();
+
+            for(int i = 0; i < objectTriangles.Length; i += 3)
+            {
+                TriangleData triangle = new TriangleData(objectVertices[objectTriangles[i + 0]],
+                                                         objectVertices[objectTriangles[i + 1]],
+                                                         objectVertices[objectTriangles[i + 2]],
+                                                         objectRigidBody);
+
+                SlammingForceData slamming = new SlammingForceData();
+
+                slamming.originalArea = triangle.area;
+                slamming.submergedArea = 0f;
+                slamming.previousSubmergedArea = 0f;
+                slamming.velocity = Vector3.zero;
+                slamming.previousVelocity = Vector3.zero;
+
+                slammingForceData.Add(slamming);
+            }
+
+            return slammingForceData;
+        }
+
+        private void AddTriangles(bool under)
         {
             List<VertexData> vertexData = new List<VertexData>();
 
@@ -52,6 +122,7 @@ namespace WaterPhysics
             vertexData.Add(new VertexData());
 
             int i = 0;
+            int triangleCounter = 0;
             while(i < objectTriangles.Length)
             {
                 for(int j = 0; j < 3; j++)
@@ -68,15 +139,22 @@ namespace WaterPhysics
                     i++;
                 }
 
+                slammingForceData[triangleCounter].center = (vertexData[0].globalVertexPos + vertexData[1].globalVertexPos + vertexData[2].globalVertexPos) / 3f;
+
                 if (vertexData[0].distance > 0f && vertexData[1].distance > 0f && vertexData[2].distance > 0f)
                 {
+                    slammingForceData[triangleCounter].submergedArea = 0f;
+
                     continue;
                 }
 
 
                 if (vertexData[0].distance < 0f && vertexData[1].distance < 0f && vertexData[2].distance < 0f)
                 {
-                    cuttedMesh.Add(new TriangleData(vertexData[0].globalVertexPos, vertexData[1].globalVertexPos, vertexData[2].globalVertexPos));
+                    cuttedMesh.Add(new TriangleData(vertexData[0].globalVertexPos, vertexData[1].globalVertexPos, vertexData[2].globalVertexPos, objectRigidBody));
+                    originalTriangleIndex.Add(triangleCounter);
+
+                    slammingForceData[triangleCounter].submergedArea = slammingForceData[triangleCounter].originalArea;
                 }
                 else
                 {
@@ -86,12 +164,23 @@ namespace WaterPhysics
                     if (vertexData[0].distance > 0f && vertexData[1].distance < 0f && vertexData[2].distance < 0f)
                     {
                         AddTriangleOneAbove(vertexData);
+
+                        slammingForceData[triangleCounter].submergedArea = cuttedMesh[cuttedMesh.Count - 1].area + cuttedMesh[cuttedMesh.Count - 2].area;
+
+                        originalTriangleIndex.Add(triangleCounter);
+                        originalTriangleIndex.Add(triangleCounter);
                     }
                     else if (vertexData[0].distance > 0f && vertexData[1].distance > 0f && vertexData[2].distance < 0f)
                     {
                         AddTriangleTwoAbove(vertexData);
+
+                        slammingForceData[triangleCounter].submergedArea = cuttedMesh[cuttedMesh.Count - 1].area;
+
+                        originalTriangleIndex.Add(triangleCounter);
                     }
                 }
+
+                triangleCounter += 1;
             }
         }
 
@@ -136,8 +225,8 @@ namespace WaterPhysics
             Vector3 I_M = t_M * (H - M) + M;
             Vector3 I_L = t_L * (H - L) + L;
 
-            cuttedMesh.Add(new TriangleData(M, I_M, I_L));
-            cuttedMesh.Add(new TriangleData(M, I_L, L));
+            cuttedMesh.Add(new TriangleData(M, I_M, I_L, objectRigidBody));
+            cuttedMesh.Add(new TriangleData(M, I_L, L, objectRigidBody));
         }
 
         private void AddTriangleTwoAbove(List<VertexData> vertexData)
@@ -181,7 +270,7 @@ namespace WaterPhysics
             Vector3 I_M = t_M * (M - L) + L;
             Vector3 I_H = t_H * (H - L) + L;
 
-            cuttedMesh.Add(new TriangleData(L, I_H, I_M));
+            cuttedMesh.Add(new TriangleData(L, I_H, I_M, objectRigidBody));
         }
 
         private class VertexData
@@ -190,7 +279,6 @@ namespace WaterPhysics
             public int index;
             public Vector3 globalVertexPos;
         }
-
 
         public void DisplayMesh(Mesh mesh)
         {

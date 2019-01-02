@@ -16,8 +16,10 @@ namespace WaterPhysics
         public Vector3 center;
         public float distanceToSurface;
         public float area;
+        public Vector3 pointVelocity;
+        public float cosTheta;
 
-        public TriangleData(Vector3 p1, Vector3 p2, Vector3 p3)
+        public TriangleData(Vector3 p1, Vector3 p2, Vector3 p3, Rigidbody objectRigidBody)
         {
             this.p1 = p1;
             this.p2 = p2;
@@ -33,6 +35,10 @@ namespace WaterPhysics
             float c = Vector3.Distance(p1, p3);
 
             this.area = (a * c * Mathf.Sin(Vector3.Angle(p2 - p1, p3 - p1) * Mathf.Deg2Rad)) / 2f;
+
+            this.pointVelocity = WaterPhysicsMath.TrianglePointVelocity(objectRigidBody.velocity, objectRigidBody.angularVelocity, objectRigidBody.worldCenterOfMass, this.center);
+
+            this.cosTheta = Vector3.Dot(this.pointVelocity.normalized, this.normal);
         }
 
     }
